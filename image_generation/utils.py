@@ -7,6 +7,8 @@
 
 import sys, random, os
 import bpy, bpy_extras
+from math import radians
+import numpy as np
 
 
 """
@@ -32,14 +34,21 @@ def extract_args(input_argv=None):
 def parse_args(parser, argv=None):
   return parser.parse_args(extract_args(argv))
 
+def col2int(r, g, b):
+  return np.around(r * 255), np.around(g * 255), np.around(b * 255)
+
+def closest_color(col_list, base_col, tolerence=1):
+  diffs = np.abs(np.subtract(col_list, base_col))
+
+  idx = diffs.sum(axis=-1).argsort()
+
+  return [*col_list[idx[np.all(diffs[idx] <= tolerence, axis=-1)]], base_col][0]
+
 
 # I wonder if there's a better way to do this?
 def delete_object(obj):
   """ Delete a specified blender object """
-  for o in bpy.data.objects:
-    o.select = False
-  obj.select = True
-  bpy.ops.object.delete()
+  bpy.data.objects.remove(obj, do_unlink=True)
 
 
 def get_camera_coords(cam, pos):
@@ -100,8 +109,8 @@ def add_object(object_dir, name, scale, loc, theta=0):
 
   # Set the new object as active, then rotate, scale, and translate it
   x, y = loc
-  bpy.context.scene.objects.active = bpy.data.objects[new_name]
-  bpy.context.object.rotation_euler[2] = theta
+  bpy.context.view_layer.objects.active = bpy.data.objects[new_name]
+  bpy.context.object.rotation_euler = [0, 0, radians(theta)]
   bpy.ops.transform.resize(value=(scale, scale, scale))
   bpy.ops.transform.translate(value=(x, y, scale))
 
@@ -136,6 +145,8 @@ def add_material(name, **properties):
   # "Material" and we will still be able to look it up by name
   mat = bpy.data.materials['Material']
   mat.name = 'Material_%d' % mat_count
+
+  mat.use_nodes = True
 
   # Attach the new material to the active object
   # Make sure it doesn't already have materials

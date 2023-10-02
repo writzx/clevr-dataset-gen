@@ -8,7 +8,8 @@
 from __future__ import print_function
 import math, sys, random, argparse, json, os, tempfile
 from datetime import datetime as dt
-from collections import Counter
+from pycocotools import mask
+import numpy as np
 
 """
 Renders random scenes using Blender, each with with a random number of objects;
@@ -33,7 +34,7 @@ if INSIDE_BLENDER:
     import utils
   except ImportError as e:
     print("\nERROR")
-    print("Running render_images.py from Blender and cannot import utils.py.") 
+    print("Running render_images.py from Blender and cannot import utils.py.")
     print("You may need to add a .pth file to the site-packages of Blender's")
     print("bundled python with a command like this:\n")
     print("echo $PWD >> $BLENDER/$VERSION/python/lib/python3.5/site-packages/clevr.pth")
@@ -45,112 +46,113 @@ parser = argparse.ArgumentParser()
 
 # Input options
 parser.add_argument('--base_scene_blendfile', default='data/base_scene.blend',
-    help="Base blender file on which all scenes are based; includes " +
-          "ground plane, lights, and camera.")
+                    help="Base blender file on which all scenes are based; includes " +
+                         "ground plane, lights, and camera.")
 parser.add_argument('--properties_json', default='data/properties.json',
-    help="JSON file defining objects, materials, sizes, and colors. " +
-         "The \"colors\" field maps from CLEVR color names to RGB values; " +
-         "The \"sizes\" field maps from CLEVR size names to scalars used to " +
-         "rescale object models; the \"materials\" and \"shapes\" fields map " +
-         "from CLEVR material and shape names to .blend files in the " +
-         "--object_material_dir and --shape_dir directories respectively.")
+                    help="JSON file defining objects, materials, sizes, and colors. " +
+                         "The \"colors\" field maps from CLEVR color names to RGB values; " +
+                         "The \"sizes\" field maps from CLEVR size names to scalars used to " +
+                         "rescale object models; the \"materials\" and \"shapes\" fields map " +
+                         "from CLEVR material and shape names to .blend files in the " +
+                         "--object_material_dir and --shape_dir directories respectively.")
 parser.add_argument('--shape_dir', default='data/shapes',
-    help="Directory where .blend files for object models are stored")
+                    help="Directory where .blend files for object models are stored")
 parser.add_argument('--material_dir', default='data/materials',
-    help="Directory where .blend files for materials are stored")
+                    help="Directory where .blend files for materials are stored")
 parser.add_argument('--shape_color_combos_json', default=None,
-    help="Optional path to a JSON file mapping shape names to a list of " +
-         "allowed color names for that shape. This allows rendering images " +
-         "for CLEVR-CoGenT.")
+                    help="Optional path to a JSON file mapping shape names to a list of " +
+                         "allowed color names for that shape. This allows rendering images " +
+                         "for CLEVR-CoGenT.")
 
 # Settings for objects
 parser.add_argument('--min_objects', default=3, type=int,
-    help="The minimum number of objects to place in each scene")
+                    help="The minimum number of objects to place in each scene")
 parser.add_argument('--max_objects', default=10, type=int,
-    help="The maximum number of objects to place in each scene")
+                    help="The maximum number of objects to place in each scene")
 parser.add_argument('--min_dist', default=0.25, type=float,
-    help="The minimum allowed distance between object centers")
+                    help="The minimum allowed distance between object centers")
 parser.add_argument('--margin', default=0.4, type=float,
-    help="Along all cardinal directions (left, right, front, back), all " +
-         "objects will be at least this distance apart. This makes resolving " +
-         "spatial relationships slightly less ambiguous.")
+                    help="Along all cardinal directions (left, right, front, back), all " +
+                         "objects will be at least this distance apart. This makes resolving " +
+                         "spatial relationships slightly less ambiguous.")
 parser.add_argument('--min_pixels_per_object', default=200, type=int,
-    help="All objects will have at least this many visible pixels in the " +
-         "final rendered images; this ensures that no objects are fully " +
-         "occluded by other objects.")
+                    help="All objects will have at least this many visible pixels in the " +
+                         "final rendered images; this ensures that no objects are fully " +
+                         "occluded by other objects.")
 parser.add_argument('--max_retries', default=50, type=int,
-    help="The number of times to try placing an object before giving up and " +
-         "re-placing all objects in the scene.")
+                    help="The number of times to try placing an object before giving up and " +
+                         "re-placing all objects in the scene.")
 
 # Output settings
 parser.add_argument('--start_idx', default=0, type=int,
-    help="The index at which to start for numbering rendered images. Setting " +
-         "this to non-zero values allows you to distribute rendering across " +
-         "multiple machines and recombine the results later.")
+                    help="The index at which to start for numbering rendered images. Setting " +
+                         "this to non-zero values allows you to distribute rendering across " +
+                         "multiple machines and recombine the results later.")
 parser.add_argument('--num_images', default=5, type=int,
-    help="The number of images to render")
+                    help="The number of images to render")
 parser.add_argument('--filename_prefix', default='CLEVR',
-    help="This prefix will be prepended to the rendered images and JSON scenes")
+                    help="This prefix will be prepended to the rendered images and JSON scenes")
 parser.add_argument('--split', default='new',
-    help="Name of the split for which we are rendering. This will be added to " +
-         "the names of rendered images, and will also be stored in the JSON " +
-         "scene structure for each image.")
+                    help="Name of the split for which we are rendering. This will be added to " +
+                         "the names of rendered images, and will also be stored in the JSON " +
+                         "scene structure for each image.")
 parser.add_argument('--output_image_dir', default='../output/images/',
-    help="The directory where output images will be stored. It will be " +
-         "created if it does not exist.")
+                    help="The directory where output images will be stored. It will be " +
+                         "created if it does not exist.")
 parser.add_argument('--output_scene_dir', default='../output/scenes/',
-    help="The directory where output JSON scene structures will be stored. " +
-         "It will be created if it does not exist.")
+                    help="The directory where output JSON scene structures will be stored. " +
+                         "It will be created if it does not exist.")
 parser.add_argument('--output_scene_file', default='../output/CLEVR_scenes.json',
-    help="Path to write a single JSON file containing all scene information")
+                    help="Path to write a single JSON file containing all scene information")
 parser.add_argument('--output_blend_dir', default='output/blendfiles',
-    help="The directory where blender scene files will be stored, if the " +
-         "user requested that these files be saved using the " +
-         "--save_blendfiles flag; in this case it will be created if it does " +
-         "not already exist.")
+                    help="The directory where blender scene files will be stored, if the " +
+                         "user requested that these files be saved using the " +
+                         "--save_blendfiles flag; in this case it will be created if it does " +
+                         "not already exist.")
 parser.add_argument('--save_blendfiles', type=int, default=0,
-    help="Setting --save_blendfiles 1 will cause the blender scene file for " +
-         "each generated image to be stored in the directory specified by " +
-         "the --output_blend_dir flag. These files are not saved by default " +
-         "because they take up ~5-10MB each.")
+                    help="Setting --save_blendfiles 1 will cause the blender scene file for " +
+                         "each generated image to be stored in the directory specified by " +
+                         "the --output_blend_dir flag. These files are not saved by default " +
+                         "because they take up ~5-10MB each.")
 parser.add_argument('--version', default='1.0',
-    help="String to store in the \"version\" field of the generated JSON file")
+                    help="String to store in the \"version\" field of the generated JSON file")
 parser.add_argument('--license',
-    default="Creative Commons Attribution (CC-BY 4.0)",
-    help="String to store in the \"license\" field of the generated JSON file")
+                    default="Creative Commons Attribution (CC-BY 4.0)",
+                    help="String to store in the \"license\" field of the generated JSON file")
 parser.add_argument('--date', default=dt.today().strftime("%m/%d/%Y"),
-    help="String to store in the \"date\" field of the generated JSON file; " +
-         "defaults to today's date")
+                    help="String to store in the \"date\" field of the generated JSON file; " +
+                         "defaults to today's date")
 
 # Rendering options
 parser.add_argument('--use_gpu', default=0, type=int,
-    help="Setting --use_gpu 1 enables GPU-accelerated rendering using CUDA. " +
-         "You must have an NVIDIA GPU with the CUDA toolkit installed for " +
-         "to work.")
+                    help="Setting --use_gpu 1 enables GPU-accelerated rendering using CUDA. " +
+                         "You must have an NVIDIA GPU with the CUDA toolkit installed for " +
+                         "to work.")
 parser.add_argument('--width', default=320, type=int,
-    help="The width (in pixels) for the rendered images")
+                    help="The width (in pixels) for the rendered images")
 parser.add_argument('--height', default=240, type=int,
-    help="The height (in pixels) for the rendered images")
+                    help="The height (in pixels) for the rendered images")
 parser.add_argument('--key_light_jitter', default=1.0, type=float,
-    help="The magnitude of random jitter to add to the key light position.")
+                    help="The magnitude of random jitter to add to the key light position.")
 parser.add_argument('--fill_light_jitter', default=1.0, type=float,
-    help="The magnitude of random jitter to add to the fill light position.")
+                    help="The magnitude of random jitter to add to the fill light position.")
 parser.add_argument('--back_light_jitter', default=1.0, type=float,
-    help="The magnitude of random jitter to add to the back light position.")
+                    help="The magnitude of random jitter to add to the back light position.")
 parser.add_argument('--camera_jitter', default=0.5, type=float,
-    help="The magnitude of random jitter to add to the camera position")
+                    help="The magnitude of random jitter to add to the camera position")
 parser.add_argument('--render_num_samples', default=512, type=int,
-    help="The number of samples to use when rendering. Larger values will " +
-         "result in nicer images but will cause rendering to take longer.")
+                    help="The number of samples to use when rendering. Larger values will " +
+                         "result in nicer images but will cause rendering to take longer.")
 parser.add_argument('--render_min_bounces', default=8, type=int,
-    help="The minimum number of bounces to use for rendering.")
+                    help="The minimum number of bounces to use for rendering.")
 parser.add_argument('--render_max_bounces', default=8, type=int,
-    help="The maximum number of bounces to use for rendering.")
+                    help="The maximum number of bounces to use for rendering.")
 parser.add_argument('--render_tile_size', default=256, type=int,
-    help="The tile size to use for rendering. This should not affect the " +
-         "quality of the rendered image but may affect the speed; CPU-based " +
-         "rendering may achieve better performance using smaller tile sizes " +
-         "while larger tile sizes may be optimal for GPU-based rendering.")
+                    help="The tile size to use for rendering. This should not affect the " +
+                         "quality of the rendered image but may affect the speed; CPU-based " +
+                         "rendering may achieve better performance using smaller tile sizes " +
+                         "while larger tile sizes may be optimal for GPU-based rendering.")
+
 
 def main(args):
   num_digits = 6
@@ -168,7 +170,7 @@ def main(args):
     os.makedirs(args.output_scene_dir)
   if args.save_blendfiles == 1 and not os.path.isdir(args.output_blend_dir):
     os.makedirs(args.output_blend_dir)
-  
+
   all_scene_paths = []
   for i in range(args.num_images):
     img_path = img_template % (i + args.start_idx)
@@ -179,13 +181,13 @@ def main(args):
       blend_path = blend_template % (i + args.start_idx)
     num_objects = random.randint(args.min_objects, args.max_objects)
     render_scene(args,
-      num_objects=num_objects,
-      output_index=(i + args.start_idx),
-      output_split=args.split,
-      output_image=img_path,
-      output_scene=scene_path,
-      output_blendfile=blend_path,
-    )
+                 num_objects=num_objects,
+                 output_index=(i + args.start_idx),
+                 output_split=args.split,
+                 output_image=img_path,
+                 output_scene=scene_path,
+                 output_blendfile=blend_path,
+                 )
 
   # After rendering all images, combine the JSON files for each scene into a
   # single JSON file.
@@ -206,16 +208,14 @@ def main(args):
     json.dump(output, f)
 
 
-
 def render_scene(args,
-    num_objects=5,
-    output_index=0,
-    output_split='none',
-    output_image='render.png',
-    output_scene='render_json',
-    output_blendfile=None,
-  ):
-
+                 num_objects=5,
+                 output_index=0,
+                 output_split='none',
+                 output_image='render.png',
+                 output_scene='render_json',
+                 output_blendfile=None,
+                 ):
   # Load the main blendfile
   bpy.ops.wm.open_mainfile(filepath=args.base_scene_blendfile)
 
@@ -227,19 +227,19 @@ def render_scene(args,
   # cannot be used.
   render_args = bpy.context.scene.render
   render_args.engine = "CYCLES"
-  render_args.filepath = output_image
+  render_args.filepath = os.path.abspath(output_image)
   render_args.resolution_x = args.width
   render_args.resolution_y = args.height
   render_args.resolution_percentage = 100
-  render_args.tile_x = args.render_tile_size
-  render_args.tile_y = args.render_tile_size
+  # render_args.tile_x = args.render_tile_size
+  # render_args.tile_y = args.render_tile_size
   if args.use_gpu == 1:
     # Blender changed the API for enabling CUDA at some point
     if bpy.app.version < (2, 78, 0):
       bpy.context.user_preferences.system.compute_device_type = 'CUDA'
       bpy.context.user_preferences.system.compute_device = 'CUDA_0'
     else:
-      cycles_prefs = bpy.context.user_preferences.addons['cycles'].preferences
+      cycles_prefs = bpy.context.preferences.addons['cycles'].preferences
       cycles_prefs.compute_device_type = 'CUDA'
 
   # Some CYCLES-specific stuff
@@ -250,18 +250,19 @@ def render_scene(args,
   bpy.context.scene.cycles.transparent_max_bounces = args.render_max_bounces
   if args.use_gpu == 1:
     bpy.context.scene.cycles.device = 'GPU'
+    bpy.context.scene.cycles.feature_set = "SUPPORTED"
 
   # This will give ground-truth information about the scene and its objects
   scene_struct = {
-      'split': output_split,
-      'image_index': output_index,
-      'image_filename': os.path.basename(output_image),
-      'objects': [],
-      'directions': {},
+    'split': output_split,
+    'image_index': output_index,
+    'image_filename': os.path.basename(output_image),
+    'objects': [],
+    'directions': {},
   }
 
   # Put a plane on the ground so we can compute cardinal directions
-  bpy.ops.mesh.primitive_plane_add(radius=5)
+  bpy.ops.mesh.primitive_plane_add(size=5)
   plane = bpy.context.object
 
   def rand(L):
@@ -276,9 +277,9 @@ def render_scene(args,
   # them in the scene structure
   camera = bpy.data.objects['Camera']
   plane_normal = plane.data.vertices[0].normal
-  cam_behind = camera.matrix_world.to_quaternion() * Vector((0, 0, -1))
-  cam_left = camera.matrix_world.to_quaternion() * Vector((-1, 0, 0))
-  cam_up = camera.matrix_world.to_quaternion() * Vector((0, 1, 0))
+  cam_behind = camera.matrix_world.to_quaternion() @ Vector((0, 0, -1))
+  cam_left = camera.matrix_world.to_quaternion() @ Vector((-1, 0, 0))
+  cam_up = camera.matrix_world.to_quaternion() @ Vector((0, 1, 0))
   plane_behind = (cam_behind - cam_behind.project(plane_normal)).normalized()
   plane_left = (cam_left - cam_left.project(plane_normal)).normalized()
   plane_up = cam_up.project(plane_normal).normalized()
@@ -433,7 +434,8 @@ def add_random_objects(scene_struct, num_objects, args, camera):
     })
 
   # Check that all objects are at least partially visible in the rendered image
-  all_visible = check_visibility(blender_objects, args.min_pixels_per_object)
+  all_visible, masks = check_visibility(blender_objects, args.min_pixels_per_object)
+
   if not all_visible:
     # If any of the objects are fully occluded then start over; delete all
     # objects from the scene and place them all again.
@@ -442,13 +444,18 @@ def add_random_objects(scene_struct, num_objects, args, camera):
       utils.delete_object(obj)
     return add_random_objects(scene_struct, num_objects, args, camera)
 
+  for obj, mask in zip(objects, masks):
+    obj['mask'] = mask
+
+  print(objects)
+
   return objects, blender_objects
 
 
 def compute_all_relationships(scene_struct, eps=0.2):
   """
   Computes relationships between all pairs of objects in the scene.
-  
+
   Returns a dictionary mapping string relationship names to lists of lists of
   integers, where output[rel][i] gives a list of object indices that have the
   relationship rel with object i. For example if j is in output['left'][i] then
@@ -483,22 +490,45 @@ def check_visibility(blender_objects, min_pixels_per_object):
 
   Returns True if all objects are visible and False otherwise.
   """
-  f, path = tempfile.mkstemp(suffix='.png')
+  f, path = tempfile.mkstemp(suffix='.exr')
   object_colors = render_shadeless(blender_objects, path=path)
+
   img = bpy.data.images.load(path)
-  p = list(img.pixels)
-  color_count = Counter((p[i], p[i+1], p[i+2], p[i+3])
-                        for i in range(0, len(p), 4))
+  img_shape = (4, *img.size)[::-1]
+
+  mask_image_data = np.array(list(img.pixels)).reshape(img_shape)
+  mask_image_data = np.around(mask_image_data * 255).astype(int)
+
+  os.close(f)
   os.remove(path)
-  if len(color_count) != len(blender_objects) + 1:
-    return False
-  for _, count in color_count.most_common():
-    if count < min_pixels_per_object:
-      return False
-  return True
+
+  unique_colors = np.unique(mask_image_data.reshape((-1, img_shape[2])), axis=0)
+
+  if unique_colors.shape[0] != len(blender_objects) + 1:
+    return False, []
+
+  masks = []
+
+  for col in object_colors:
+    actual_color = utils.closest_color(unique_colors, np.array([*col, 255]).astype(int))
+
+    down_object_mask = np.all(mask_image_data == actual_color, axis=-1).astype(np.uint8)
+
+    visible = down_object_mask.sum() > min_pixels_per_object
+
+    if not visible:
+      return False, []
+
+    encoded_mask = mask.encode(np.asfortranarray(down_object_mask))
+
+    encoded_mask['counts'] = encoded_mask['counts'].decode('utf-8')
+
+    masks += [encoded_mask]
+
+  return True, masks
 
 
-def render_shadeless(blender_objects, path='flat.png'):
+def render_shadeless(blender_objects, path='flat.exr'):
   """
   Render a version of the scene with shading disabled and unique materials
   assigned to all objects, and return a set of all colors that should be in the
@@ -506,22 +536,50 @@ def render_shadeless(blender_objects, path='flat.png'):
   that all objects will be visible in the final rendered scene.
   """
   render_args = bpy.context.scene.render
+  image_settings = bpy.context.scene.render.image_settings
 
   # Cache the render args we are about to clobber
   old_filepath = render_args.filepath
   old_engine = render_args.engine
-  old_use_antialiasing = render_args.use_antialiasing
+  old_render_aa = bpy.context.scene.display.render_aa
+  old_shading_light = bpy.data.scenes["Scene"].display.shading.light
+  old_image_settings = {
+    'quality': image_settings.quality,
+    'compression': image_settings.compression,
+    'file_format': image_settings.file_format,
+    'exr_codec': image_settings.exr_codec,
+    'is_data': image_settings.linear_colorspace_settings.is_data,
+    'color_depth': image_settings.color_depth
+  }
 
   # Override some render settings to have flat shading
   render_args.filepath = path
-  render_args.engine = 'BLENDER_RENDER'
-  render_args.use_antialiasing = False
+  render_args.engine = 'BLENDER_WORKBENCH'
+  bpy.context.scene.display.render_aa = "OFF"
+  bpy.data.scenes["Scene"].display.shading.light = "FLAT"
 
-  # Move the lights and ground to layer 2 so they don't render
-  utils.set_layer(bpy.data.objects['Lamp_Key'], 2)
-  utils.set_layer(bpy.data.objects['Lamp_Fill'], 2)
-  utils.set_layer(bpy.data.objects['Lamp_Back'], 2)
-  utils.set_layer(bpy.data.objects['Ground'], 2)
+  image_settings.quality = 100
+  image_settings.compression = 0
+  image_settings.file_format = 'OPEN_EXR'
+  image_settings.exr_codec = 'RLE'
+  image_settings.linear_colorspace_settings.is_data = True
+  image_settings.color_depth = '32'
+
+  def hide_obj(obj):
+    obj.hide_render = True
+    obj.hide_viewport = True
+    obj.hide_set(True)
+
+  def show_obj(obj):
+    obj.hide_render = False
+    obj.hide_viewport = False
+    obj.hide_set(False)
+
+  # hide the lights and ground so they don't render
+  hide_obj(bpy.data.objects['Lamp_Key'])
+  hide_obj(bpy.data.objects['Lamp_Fill'])
+  hide_obj(bpy.data.objects['Lamp_Back'])
+  hide_obj(bpy.data.objects['Ground'])
 
   # Add random shadeless materials to all objects
   object_colors = set()
@@ -533,10 +591,17 @@ def render_shadeless(blender_objects, path='flat.png'):
     mat.name = 'Material_%d' % i
     while True:
       r, g, b = [random.random() for _ in range(3)]
-      if (r, g, b) not in object_colors: break
-    object_colors.add((r, g, b))
-    mat.diffuse_color = [r, g, b]
-    mat.use_shadeless = True
+
+      col_srgb = utils.col2int(r, g, b)
+
+      if col_srgb not in object_colors:
+        break
+    object_colors.add(col_srgb)
+
+    mat.diffuse_color = [r, g, b, 1]
+    mat.shadow_method = 'NONE'
+
+    mat.use_nodes = False
     obj.data.materials[0] = mat
 
   # Render the scene
@@ -546,18 +611,27 @@ def render_shadeless(blender_objects, path='flat.png'):
   for mat, obj in zip(old_materials, blender_objects):
     obj.data.materials[0] = mat
 
-  # Move the lights and ground back to layer 0
-  utils.set_layer(bpy.data.objects['Lamp_Key'], 0)
-  utils.set_layer(bpy.data.objects['Lamp_Fill'], 0)
-  utils.set_layer(bpy.data.objects['Lamp_Back'], 0)
-  utils.set_layer(bpy.data.objects['Ground'], 0)
+  # show the lights and ground again
+  show_obj(bpy.data.objects['Lamp_Key'])
+  show_obj(bpy.data.objects['Lamp_Fill'])
+  show_obj(bpy.data.objects['Lamp_Back'])
+  show_obj(bpy.data.objects['Ground'])
 
   # Set the render settings back to what they were
   render_args.filepath = old_filepath
   render_args.engine = old_engine
-  render_args.use_antialiasing = old_use_antialiasing
 
-  return object_colors
+  bpy.context.scene.display.render_aa = old_render_aa
+  bpy.data.scenes["Scene"].display.shading.light = old_shading_light
+
+  image_settings.quality = old_image_settings['quality']
+  image_settings.compression = old_image_settings['compression']
+  image_settings.file_format = old_image_settings['file_format']
+  image_settings.exr_codec = old_image_settings['exr_codec']
+  image_settings.linear_colorspace_settings.is_data = old_image_settings['is_data']
+  image_settings.color_depth = old_image_settings['color_depth']
+
+  return [*object_colors]
 
 
 if __name__ == '__main__':
@@ -577,4 +651,3 @@ if __name__ == '__main__':
     print('arguments like this:')
     print()
     print('python render_images.py --help')
-
