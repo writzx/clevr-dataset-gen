@@ -503,7 +503,7 @@ def check_visibility(blender_objects, min_pixels_per_object):
   img = bpy.data.images.load(path)
   img_shape = (4, *img.size)[::-1]
 
-  mask_image_data = np.array(list(img.pixels)).reshape(img_shape)
+  mask_image_data = np.array(list(img.pixels)).reshape(img_shape)[::-1, ...]  # reverse vertical axis for exr
   mask_image_data = np.around(mask_image_data * 255).astype(int)
 
   os.close(f)
