@@ -447,8 +447,6 @@ def add_random_objects(scene_struct, num_objects, args, camera):
   for obj, mask in zip(objects, masks):
     obj['mask'] = mask
 
-  print(objects)
-
   return objects, blender_objects
 
 
