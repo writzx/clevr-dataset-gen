@@ -6,7 +6,7 @@
 # of patent rights can be found in the PATENTS file in the same directory.
 
 from __future__ import print_function
-import math, sys, random, argparse, json, os, tempfile
+import math, sys, random, argparse, json, os, tempfile, glob
 from datetime import datetime as dt
 from pycocotools import mask
 import numpy as np
@@ -45,8 +45,8 @@ if INSIDE_BLENDER:
 parser = argparse.ArgumentParser()
 
 # Input options
-parser.add_argument('--base_scene_blendfile', default='data/base_scene.blend',
-                    help="Base blender file on which all scenes are based; includes " +
+parser.add_argument('--base_scenes_path', default='data/base_scenes',
+                    help="Directory containing base blender files on which all scenes are based; includes " +
                          "ground plane, lights, and camera.")
 parser.add_argument('--properties_json', default='data/properties.json',
                     help="JSON file defining objects, materials, sizes, and colors. " +
@@ -164,6 +164,8 @@ def main(args):
   scene_template = os.path.join(args.output_scene_dir, scene_template)
   blend_template = os.path.join(args.output_blend_dir, blend_template)
 
+  mainfiles = glob.glob(os.path.join(args.base_scenes_path, '*.blend'))
+
   if not os.path.isdir(args.output_image_dir):
     os.makedirs(args.output_image_dir)
   if not os.path.isdir(args.output_scene_dir):
@@ -173,6 +175,7 @@ def main(args):
 
   all_scene_paths = []
   for i in range(args.num_images):
+    mainfile = random.choice(mainfiles)
     img_path = img_template % (i + args.start_idx)
     scene_path = scene_template % (i + args.start_idx)
     all_scene_paths.append(scene_path)
@@ -181,6 +184,7 @@ def main(args):
       blend_path = blend_template % (i + args.start_idx)
     num_objects = random.randint(args.min_objects, args.max_objects)
     render_scene(args,
+                 base_scene_blendfile=mainfile,
                  num_objects=num_objects,
                  output_index=(i + args.start_idx),
                  output_split=args.split,
@@ -209,6 +213,7 @@ def main(args):
 
 
 def render_scene(args,
+                 base_scene_blendfile=None,
                  num_objects=5,
                  output_index=0,
                  output_split='none',
@@ -216,8 +221,12 @@ def render_scene(args,
                  output_scene='render_json',
                  output_blendfile=None,
                  ):
+  if base_scene_blendfile is None:
+    print('No blenfile provided; aborting!')
+    return
+
   # Load the main blendfile
-  bpy.ops.wm.open_mainfile(filepath=args.base_scene_blendfile)
+  bpy.ops.wm.open_mainfile(filepath=base_scene_blendfile)
 
   # Load materials
   utils.load_materials(args.material_dir)
