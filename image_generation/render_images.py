@@ -45,8 +45,8 @@ if INSIDE_BLENDER:
 parser = argparse.ArgumentParser()
 
 # Input options
-parser.add_argument('--base_scenes_path', default='data/base_scenes',
-                    help="Directory containing base blender files on which all scenes are based; includes " +
+parser.add_argument('--base_scene_blendfile', default='data/base_scene.blend',
+                    help="Base blender file on which all scenes are based; includes " +
                          "ground plane, lights, and camera.")
 parser.add_argument('--properties_json', default='data/properties.json',
                     help="JSON file defining objects, materials, sizes, and colors. " +
@@ -157,14 +157,17 @@ parser.add_argument('--render_tile_size', default=256, type=int,
 def main(args):
   num_digits = 6
   prefix = '%s_%s_' % (args.filename_prefix, args.split)
+  prefix_L = '%s_%s_' % (args.filename_prefix, args.split)
   img_template = '%s%%0%dd.png' % (prefix, num_digits)
+  img_template_L = '%s%%0%dd.png' % (prefix_L, num_digits)
   scene_template = '%s%%0%dd.json' % (prefix, num_digits)
+  scene_template_L = '%s%%0%dd.json' % (prefix_L, num_digits)
   blend_template = '%s%%0%dd.blend' % (prefix, num_digits)
   img_template = os.path.join(args.output_image_dir, img_template)
+  img_template_L = os.path.join(args.output_image_dir, img_template_L)
   scene_template = os.path.join(args.output_scene_dir, scene_template)
+  scene_template_L = os.path.join(args.output_scene_dir, scene_template_L)
   blend_template = os.path.join(args.output_blend_dir, blend_template)
-
-  mainfiles = glob.glob(os.path.join(args.base_scenes_path, '*.blend'))
 
   if not os.path.isdir(args.output_image_dir):
     os.makedirs(args.output_image_dir)
@@ -174,23 +177,31 @@ def main(args):
     os.makedirs(args.output_blend_dir)
 
   all_scene_paths = []
-  for i in range(args.num_images):
-    mainfile = random.choice(mainfiles)
-    img_path = img_template % (i + args.start_idx)
-    scene_path = scene_template % (i + args.start_idx)
+  for j in range(args.num_images):
+    i_L = (j * 2) + 1
+    i_R = j * 2
+    mainfile = args.base_scene_blendfile
+    img_path = img_template % (i_R + args.start_idx)
+    img_path_L = img_template_L % (i_L + args.start_idx)
+    scene_path = scene_template % (i_R + args.start_idx)
+    scene_path_L = scene_template_L % (i_L + args.start_idx)
     all_scene_paths.append(scene_path)
+    all_scene_paths.append(scene_path_L)
     blend_path = None
     if args.save_blendfiles == 1:
-      blend_path = blend_template % (i + args.start_idx)
+      blend_path = blend_template % (i_R + args.start_idx)
     num_objects = random.randint(args.min_objects, args.max_objects)
     render_scene(args,
                  base_scene_blendfile=mainfile,
                  num_objects=num_objects,
-                 output_index=(i + args.start_idx),
+                 output_index=(i_R + args.start_idx),
+                 output_index_L=(i_L + args.start_idx),
                  output_split=args.split,
                  output_image=img_path,
                  output_scene=scene_path,
                  output_blendfile=blend_path,
+                 output_left_image=img_path_L,
+                 output_left_scene=scene_path_L,
                  )
 
   # After rendering all images, combine the JSON files for each scene into a
@@ -216,10 +227,13 @@ def render_scene(args,
                  base_scene_blendfile=None,
                  num_objects=5,
                  output_index=0,
+                 output_index_L=0,
                  output_split='none',
                  output_image='render.png',
                  output_scene='render_json',
                  output_blendfile=None,
+                 output_left_image=None,
+                 output_left_scene=None,
                  ):
   if base_scene_blendfile is None:
     print('No blenfile provided; aborting!')
@@ -263,7 +277,7 @@ def render_scene(args,
 
   # This will give ground-truth information about the scene and its objects
   scene_struct = {
-    'split': output_split,
+    'split': f'{output_split}',
     'image_index': output_index,
     'image_filename': os.path.basename(output_image),
     'objects': [],
@@ -329,11 +343,37 @@ def render_scene(args,
     except Exception as e:
       print(e)
 
+  if output_left_image is not None:
+    x = bpy.data.objects['Camera'].location[0]
+    y = bpy.data.objects['Camera'].location[1]
+
+    bpy.data.objects['Camera'].location[0] = -y
+    bpy.data.objects['Camera'].location[1] = -x
+
+    render_args.filepath = os.path.abspath(output_left_image)
+    while True:
+      try:
+        bpy.ops.render.render(write_still=True)
+        break
+      except Exception as e:
+        print(e)
+
   with open(output_scene, 'w') as f:
     json.dump(scene_struct, f, indent=2)
 
+  with open(output_left_scene, 'w') as f:
+    json.dump({
+        **scene_struct,
+      'split': f'{output_split}',
+      'image_index': output_index_L,
+      'image_filename': os.path.basename(output_left_image),
+    }, f, indent=2)
+
   if output_blendfile is not None:
     bpy.ops.wm.save_as_mainfile(filepath=output_blendfile)
+
+
+
 
 
 def add_random_objects(scene_struct, num_objects, args, camera):
