@@ -69,6 +69,8 @@ parser.add_argument('--min_objects', default=3, type=int,
                     help="The minimum number of objects to place in each scene")
 parser.add_argument('--max_objects', default=10, type=int,
                     help="The maximum number of objects to place in each scene")
+parser.add_argument('--axis_max', default=3.0, type=float,
+                    help="The maximum allowed value along each axis")
 parser.add_argument('--min_dist', default=0.25, type=float,
                     help="The minimum allowed distance between object centers")
 parser.add_argument('--margin', default=0.4, type=float,
@@ -376,8 +378,8 @@ def add_random_objects(scene_struct, num_objects, args, camera):
         for obj in blender_objects:
           utils.delete_object(obj)
         return add_random_objects(scene_struct, num_objects, args, camera)
-      x = random.uniform(-3, 3)
-      y = random.uniform(-3, 3)
+      x = random.uniform(-args.axis_max, args.axis_max)
+      y = random.uniform(-args.axis_max, args.axis_max)
       # Check to make sure the new object is further than min_dist from all
       # other objects, and further than margin along the four cardinal directions
       dists_good = True
